@@ -1,0 +1,342 @@
+Scripted Pipeline(NOT ADDED TO REPO):
+=====================================
+BELOW PIPELINE CLONES REPO, CREATE PACKER IMAGE &  DEPLOY TERRAFORM
+-------------------------------------------------------------------
+ 
+node {
+    stage('Clone Git Repo') {
+        sh "rm -rf terraformsingleinstance"
+        sh "git clone -b <your_branch> https://github.com/mavrick202/terraformsingleinstance.git"
+        sh "ls -al"
+    }
+    stage('Perform Backer Build') {
+        dir("terraformsingleinstance") {
+        sh "pwd"
+        sh "packer build packer.json 2>&1 | tee output.txt"
+        sh "tail -2 output.txt | head -2 | awk 'match(\$0, /ami-.*/) { print substr(\$0, RSTART, RLENGTH) }' > ami.txt"
+        sh "echo \$(cat ami.txt) > ami.txt";
+        def AMIID=readFile('ami.txt').trim()
+        sh "echo variable \\\"imagename\\\" { default = \\\"$AMIID\\\" } >> variables.tf"
+                
+        }
+        
+    }
+    stage('Terraform Apply') {
+        dir("terraformsingleinstance") {
+        
+            sh "terraform init"
+            sh "terraform apply --auto-approve"
+        }
+        
+    }
+}
+ 
+===========================================================================================
+BUILD EXECUTE SHELL SCRIPT:
+=======================================
+#!/bin/bash
+packer version
+packer validate packer.json
+if [ $? -eq 0 ]
+then
+echo "Validation Sucessfull.Lets Build The Image."
+packer build packer.json 2>&1 | tee output.txt
+tail -2 output.txt | head -2 | awk 'match($0, /ami-.*/) { print substr($0, RSTART, RLENGTH) }' > ami.txt
+AMIID=$(cat ami.txt)
+echo "variable imagename { default = \"$AMIID\" }" >> variables.tf
+terraform init
+terraform apply --auto-approve
+else
+echo "Validation FAILED. Check the CODE"
+exit 1
+fi
+=========================================
+
+USING TERRAFORM & PACKER VARS and TFVARS FILE-TESTED ON JAN 4th 2021
+
+#!/bin/bash
+echo "=============CURRENT-RUNNING-FOLDER============"
+pwd
+echo "=============LIST-CURRENT-FOLDER============"
+ls -al
+echo "=============PACKER-VALIDATE============"
+packer validate -var aws_secret_key=xGAdEXl1oPTIkJ95OZXvU/w/NbqaBFPizBsbrvZ2  -var aws_access_key=AKIA2QEFLENWOD33P3R2 -var-file=packer-vars.json packer.json
+if [ $? -eq 0 ]
+then
+    echo "Packer Code is good... lets build it"
+else
+    exit 1
+fi
+ 
+ARTIFACE_API=$(packer build -var aws_secret_key=xGAdEXl1oPTIkJ95OZXvU/w/NbqaBFPizBsbrvZ2  -var aws_access_key=AKIA2QEFLENWOD33P3R2 -var-file packer-vars.json -machine-readable packer.json | awk -F, '$0 ~/artifact,0,id/ {print $6}')
+AMI_ID=$(echo $ARTIFACE_API | cut -d ":" -f 2)
+ 
+echo "" >> variables.tf
+echo 'variable "imagename" { default = "'${AMI_ID}'" }' >> variables.tf
+cat variables.tf | grep -i imagename
+ 
+echo "=============TERRAFORM-INIT============"
+terraform init
+echo "=============TERRAFORM-PLAN============"
+terraform plan -var="aws_secret_key=xGAdEXl1oPTIkJ95OZXvU/w/NbqaBFPizBsbrvZ2"  -var="aws_access_key=AKIA2QEFLENWOD33P3R2"
+echo "=============TERRAFORM-APPLY============"
+terraform apply -var="aws_secret_key=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"  -var="aws_access_key=AKIA2QEFLENWOD33P3R2" --auto-approve
+
+FOLLOWING SCRIPT TESTED ON 16th OCT 2020:
+
+#!/bin/bash
+echo "=============CURRENT-RUNNING-FOLDER============"
+pwd
+echo "=============LIST-CURRENT-FOLDER============"
+ls -al
+echo "=============PACKER-VALIDATE============"
+packer validate -var-file=packer-vars.json packer.json
+if [ $? -eq 0 ]
+then
+    echo "Packer Code is good... lets build it"
+else
+    exit 1
+fi
+ 
+ARTIFACE_API=$(packer build --var-file=packer-vars.json -machine-readable packer.json | awk -F, '$0 ~/artifact,0,id/ {print $6}')
+AMI_ID=$(echo $ARTIFACE_API | cut -d ":" -f 2)
+ 
+echo "" >> variables.tf
+echo 'variable "imagename" { default = "'${AMI_ID}'" }' >> variables.tf
+cat variables.tf | grep -i imagename
+ 
+echo "=============TERRAFORM-INIT============"
+terraform init
+echo "=============TERRAFORM-PLAN============"
+terraform plan
+echo "=============TERRAFORM-APPLY============"
+terraform apply --auto-approve
+
+JENKINS DECLARATIVE  PIPELINE GIT-PACKER-TERRAFORM WITH WHEN TO SKIP THE STAGE- TESTED ON APRIL 24th 2021
+Instead of above AWS Credential files, add the environment variables in 
+Jenkins->Configure System -> Global properties -> Environment variables
+AWS_ACCESS_KEY_ID
+AWS_SECRET_ACCESS_KEY
+AWS_DEFAULT_REGION
+Add build parameter as DESTROY and give choices as YES & NO
+COMMENT WHEN EXPRESSION IF YOU DONT WANT TO BUILD PACKER IMAGE 
+
+pipeline {
+    agent any
+ 
+    stages {
+        stage('Clone Git Repo') {
+            steps {
+                sh 'rm -rf terraformsingleinstance'
+                sh 'git clone -b engdevopsb06gitpackterr https://github.com/mavrick202/terraformsingleinstance.git'
+                sh 'ls -al'
+            }
+        }
+        stage('Perform Backer Build') {
+            when {
+                    expression {
+                        env.BRANCH_NAME == 'engdevopsb06gitpackterr'
+                    }
+                }
+            steps {
+                dir('terraformsingleinstance') {
+                    sh 'pwd'
+                    sh 'packer build -var-file packer-vars.json packer.json | tee output.txt'
+                    sh "tail -2 output.txt | head -2 | awk 'match(\$0, /ami-.*/) { print substr(\$0, RSTART, RLENGTH) }' > ami.txt"
+                    sh "echo \$(cat ami.txt) > ami.txt"
+                    script {
+                        def AMIID = readFile('ami.txt').trim()
+                        sh "echo variable \\\"imagename\\\" { default = \\\"$AMIID\\\" } >> variables.tf"
+                    }
+                }
+            }
+        }
+        stage('Terraform Plan') {
+            steps {
+                dir('terraformsingleinstance') {
+                    sh 'terraform init'
+                    sh 'terraform plan'
+                }
+            }
+        }
+        stage('Terraform Apply') {
+            steps {
+                dir('terraformsingleinstance') {
+                    sh 'terraform init'
+                    sh 'terraform apply --auto-approve'
+                }
+            }
+        }
+        stage('Terraform Destroy') {
+            when {
+                    expression {
+                        params.DESTROY == 'YES'
+                    }
+                }
+            steps {
+                dir('terraformsingleinstance') {
+                    sh 'terraform init'
+                    sh 'terraform apply --auto-approve'
+                }
+            }
+        }
+    }
+}
+ 
+ 
+
+
+JENKINS SCRIPTED PIPELINE GIT-PACKER-TERRAFORM - TESTED ON APRIL 24th 2021
+
+
+Instead of above AWS Credential files, add the environment variables in 
+Jenkins->Configure System -> Global properties -> Environment variables
+AWS_ACCESS_KEY_ID
+AWS_SECRET_ACCESS_KEY
+AWS_DEFAULT_REGION
+node {
+    stage('Clone Git Repo') {
+        sh 'rm -rf terraformsingleinstance'
+        sh 'git clone -b engdevopsb06gitpackterr https://github.com/mavrick202/terraformsingleinstance.git'
+        sh 'ls -al'
+    }
+    stage('Perform Backer Build') {
+        dir('terraformsingleinstance') {
+            sh 'pwd'
+            sh 'packer build -var-file packer-vars.json packer.json | tee output.txt'
+            sh "tail -2 output.txt | head -2 | awk 'match(\$0, /ami-.*/) { print substr(\$0, RSTART, RLENGTH) }' > ami.txt"
+            sh "echo \$(cat ami.txt) > ami.txt"
+            def AMIID = readFile('ami.txt').trim()
+            sh "echo variable \\\"imagename\\\" { default = \\\"$AMIID\\\" } >> variables.tf"
+        }
+    }
+    stage('Terraform Plan') {
+        dir('terraformsingleinstance') {
+            sh 'terraform init'
+            sh 'terraform plan'
+        }
+    }
+    stage('Terraform Apply') {
+        dir('terraformsingleinstance') {
+            sh 'terraform init'
+            sh 'terraform apply --auto-approve'
+        }
+    }
+}
+ 
+ 
+ 
+
+FOR DESTROYING - TESTED ON APRIL 24th 2021:
+node {
+    stage('Clone Git Repo') {
+        sh 'rm -rf terraformsingleinstance'
+        sh 'git clone -b engdevopsb06gitpackterr https://github.com/mavrick202/terraformsingleinstance.git'
+        sh 'ls -al'
+    }
+    stage('Terraform Plan') {
+        dir('terraformsingleinstance') {
+            def AMIID = 'ami-0cd31035d210ea795'
+            sh "echo variable \\\"imagename\\\" { default = \\\"$AMIID\\\" } >> variables.tf"
+            sh 'terraform init'
+            sh 'terraform plan'
+        }
+    }
+    stage('Terraform Apply') {
+        dir('terraformsingleinstance') {
+            sh 'terraform init'
+            sh 'terraform destroy --auto-approve'
+        }
+    }
+}
+ 
+ 
+ 
+
+
+JENKINS DECLARATIVE PIPELINE PROJECT:
+
+pipeline {
+    agent any
+    stages {
+ 
+        stage('CheckOut GitHub Repo') {
+          steps {
+              checkout([$class: 'GitSCM', branches: [[name: 'DevOpsB14']], doGenerateSubmoduleConfigurations: false, extensions: [], submoduleCfg: [], userRemoteConfigs: [[credentialsId: 'GitHubAccess', url: 'git@github.com:mavrick202/packer-terraform-jenkins-docker.git']]])
+            }
+        }
+        
+        stage('Packer Build AMI') {
+          steps {
+            
+            sh 'pwd'
+            sh 'ls -al'
+            sh 'packer version'
+            sh 'packer validate packer.json'
+            sh 'packer build packer.json'
+            }
+        }
+                
+        stage('Deploy EC2 Server') {
+          steps {
+            sh 'terraform init'
+            sh 'terraform apply --auto-approve'
+            }
+        }
+ 
+        stage('Build Docker Image') {
+          steps {
+            sh 'docker build -t sreeharshav/pipelinetestprod:${BUILD_NUMBER} .'
+            }
+        }
+ 
+        stage('Push Image to Docker Hub') {
+          steps {
+           sh    'docker push sreeharshav/pipelinetestprod:${BUILD_NUMBER}'
+           }
+        }
+ 
+        stage('Deploy to Docker Host') {
+          steps {
+            sh 'sleep 10s'
+            sh    'docker -H tcp://10.1.1.111:2375 stop prodwebapp1 || true'
+            sh    'docker -H tcp://10.1.1.111:2375 run --rm -dit --name prodwebapp1 --hostname prodwebapp1 -p 8000:80 sreeharshav/pipelinetestprod:${BUILD_NUMBER}'
+            }
+        }
+ 
+        stage('Check WebApp Rechability') {
+          steps {
+          sh 'sleep 10s'
+          sh ' curl http://10.1.1.111:8000'
+          }
+        }
+ 
+    }
+}
+
+
+JENKINS SCRIPYED PIPELINE USING GIT CREDENTIALS - 24th Jan 2021
+node {
+    stage('Clone Git Repo') {
+        sh "rm -rf engdevopsb05-git-packer-terraform"
+        checkout([$class: 'GitSCM', branches: [[name: '*/master']], doGenerateSubmoduleConfigurations: false, extensions: [], submoduleCfg: [], userRemoteConfigs: [[credentialsId: 'GitHubJenkins', url: 'git@github.com:mavrick202/engdevopsb05-git-packer-terraform.git']]])
+        sh "ls -al"
+    }
+    stage('Perform Backer Build') {
+        sh "pwd"
+        sh "packer build -var-file packer-vars.json packer.json | tee output.txt"
+        sh "tail -2 output.txt | head -2 | awk 'match(\$0, /ami-.*/) { print substr(\$0, RSTART, RLENGTH) }' > ami.txt"
+        sh "echo \$(cat ami.txt) > ami.txt";
+        def AMIID=readFile('ami.txt').trim()
+        sh "echo variable \\\"imagename\\\" { default = \\\"$AMIID\\\" } >> variables.tf"
+        
+    }
+    stage('Terraform Apply') {
+            sh "terraform init"
+            sh "terraform apply --auto-approve"
+        
+    }
+}
+ 
+
+
